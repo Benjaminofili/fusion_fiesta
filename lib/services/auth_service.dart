@@ -18,6 +18,11 @@ class AuthService {
     String? collegeIdProofUrl,
   }) async {
     try {
+      // Staff must use institutional email
+      if (role == "staff" && !email.endsWith(".edu")) {
+        throw Exception("Staff must use institutional email (ending with .edu).");
+      }
+
       UserCredential result = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
@@ -58,14 +63,25 @@ class AuthService {
         email: email,
         password: password,
       );
-      return result.user;
+      User? user = result.user;
+
+      if (user != null) {
+        final doc = await _db.collection("users").doc(user.uid).get();
+        final data = doc.data();
+
+        if (data != null && data["role"] == "staff" && data["status"] != "approved") {
+          throw Exception("Staff account is pending approval.");
+        }
+      }
+
+      return user;
     } catch (e) {
       print("Error in loginWithEmail: $e");
       rethrow;
     }
   }
 
-  /// Google Sign-In
+  /// Google Sign-In (defaults to Visitor)
   Future<User?> loginWithGoogle() async {
     try {
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();

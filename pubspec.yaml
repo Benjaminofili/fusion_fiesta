@@ -1,5 +1,5 @@
 name: fusion_fiesta
-description: "FusionFiesta provides a platform for  administrators, event coordinators, and students to manage or participate  in college events efficiently. The app support role-based access and  allow real-time event updates, digital registrations, announcements,  feedback collection, and more."
+description: "FusionFiesta provides a platform for administrators, event coordinators, and students to manage or participate in college events efficiently. The app support role-based access and allow real-time event updates, digital registrations, announcements, feedback collection, and more."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -30,6 +30,14 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  firebase_core: ^3.6.0   # <-- use the latest stable version
+
+  # Add other Firebase products you need:
+  firebase_auth: ^5.3.0
+  cloud_firestore: ^5.4.0
+  firebase_storage: ^12.3.0
+  firebase_messaging: ^15.1.0
+  google_sign_in: ^6.2.1  
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

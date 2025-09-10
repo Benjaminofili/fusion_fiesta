@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "FusionFiesta provides a platform for  administrators, event coordinators, and students to manage or participate  in college events efficiently. The app support role-based access and  allow real-time event updates, digital registrations, announcements,  feedback collection, and more.",
+    "description": "A new Flutter project.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
