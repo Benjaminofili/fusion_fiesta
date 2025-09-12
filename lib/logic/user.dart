@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import 'permissions.dart';
 import '../screens/user/home_screen.dart';
 import '../components/users/event_card.dart'; // For summary cards
@@ -41,15 +43,41 @@ class UserLogic {
     return null;
   }
 
-  // New: Selector for sorted events (SRS 1.6.3)
+  // New: Selector for sorted events (takes filtered events to apply sort without overriding)
   static Future<List<Map<String, dynamic>>> getSortedEvents({
+    required List<Map<String, dynamic>> events, // Pass filtered events
     String sortBy = 'newest',
     String? userDepartment,
   }) async {
     if (Permissions.hasPermission('student', 'getSortedEvents')) {
-      return await Permissions.getSortedEvents(sortBy: sortBy, userDepartment: userDepartment);
+      // Fetch user data for eligibility
+      final userData = await Permissions.getUserData();
+      final isStudent = userData['role'] == 'student';
+      final isParticipant = isStudent && userData['userType'] == 'participant';
+
+      return events.map((event) {
+        bool isEligible = true;
+        if (isParticipant && event['department'] != null && event['department'] != userDepartment) {
+          isEligible = false;
+        }
+        return {...event, '_isEligible': isEligible};
+      }).toList()
+        ..sort((a, b) {
+          switch (sortBy) {
+            case 'newest':
+              final aDate = (a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(1900);
+              final bDate = (b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(1900);
+              return bDate.compareTo(aDate);
+            case 'popularity':
+              return (b['popularity'] as int?)?.compareTo(a['popularity'] as int? ?? 0) ?? 0;
+            case 'eligible':
+              return (b['_isEligible'] ? 1 : 0).compareTo(a['_isEligible'] ? 1 : 0);
+            default:
+              return 0;
+          }
+        });
     }
-    return [];
+    return events; // Fallback to input
   }
 
   // Add more student-specific selectors (e.g., upgrade if visitor)

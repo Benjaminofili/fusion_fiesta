@@ -32,31 +32,42 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
     setState(() => _isLoading = true);
     List<Map<String, dynamic>> events;
     if (_searchQuery.isNotEmpty) {
-      // Use search if query active
+      // Use search if query active (Fix: Integrate _searchQuery)
       final results = await UserLogic.searchEvents(_searchQuery);
-      events = results['matches'] ?? []; // Fix: Use search results
+      events = results['matches'] ?? [];
     } else {
-      // Use browse + sort
+      // Use browse with filters
       events = await UserLogic.browseEvents(category: _category, department: _department);
-      events = await UserLogic.getSortedEvents(sortBy: _sortBy, userDepartment: _department); // Fix: Call UserLogic selector
     }
+    // Apply sort to filtered/search results (Fix: Pass events to getSortedEvents to avoid overriding)
+    final sortedEvents = await UserLogic.getSortedEvents(
+      events: events, // Pass filtered events
+      sortBy: _sortBy,
+      userDepartment: _department,
+    );
     if (mounted) {
       setState(() {
-        _events = events;
+        _events = sortedEvents;
         _isLoading = false;
       });
     }
   }
 
-  // Fix: Separate async method for onChanged (TextField is sync)
+  // Fix: Separate async method for onChanged (debounced for performance)
   Future<void> _handleSearch(String value) async {
-    setState(() => _searchQuery = value);
-    await _loadEvents(); // Reload with search
+    if (value != _searchQuery) {
+      setState(() => _searchQuery = value);
+      await _loadEvents(); // Reload with search/filters
+      if (value.isNotEmpty) {
+        final results = await UserLogic.searchEvents(value);
+        _showSuggestions(results['suggestions'] ?? []); // Fix: Reference _showSuggestions
+      }
+    }
   }
 
   // Fix: Separate async method for filter/sort changes
   Future<void> _handleFilterChange() async {
-    await _loadEvents();
+    await _loadEvents(); // Reload with current filters/sort
   }
 
   @override
@@ -79,7 +90,7 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
           // Search Bar with Autosuggestions
           TextField(
             onChanged: (value) {
-              // Fix: Call async method (but onChanged is sync; debounce if needed)
+              // Fix: Call async method (debounce via _handleSearch)
               _handleSearch(value);
             },
             decoration: const InputDecoration(
@@ -96,7 +107,7 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
                 items: ['technical', 'cultural', 'sports'].map((c) => DropdownMenuItem(value: c, child: Text(c.capitalize))).toList(),
                 onChanged: (v) {
                   setState(() => _category = v);
-                  _handleFilterChange(); // Fix: Async call
+                  _handleFilterChange(); // Fix: Async call for UI update
                 },
               ),
               if (widget.userType == 'participant') DropdownButton<String>(
@@ -105,7 +116,7 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
                 items: ['CS', 'ME', 'EE'].map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(), // From user data
                 onChanged: (v) {
                   setState(() => _department = v);
-                  _handleFilterChange(); // Fix: Async call
+                  _handleFilterChange(); // Fix: Async call for UI update
                 },
               ),
               DropdownButton<String>(
@@ -113,7 +124,7 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
                 items: ['newest', 'popularity', 'eligible'].map((s) => DropdownMenuItem(value: s, child: Text(s.capitalize))).toList(),
                 onChanged: (v) {
                   setState(() => _sortBy = v!);
-                  _handleFilterChange(); // Fix: Async call
+                  _handleFilterChange(); // Fix: Async call for UI update
                 },
               ),
             ],

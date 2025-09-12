@@ -5,16 +5,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart'; // For debugPrint
 import 'dart:convert'; // For base64 hash
 import 'dart:math' as math;
+import 'package:qr_flutter/qr_flutter.dart'; // Add to pubspec.yaml
 
 class Permissions {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // Permission map (expanded for events per SRS 1.6.3)
+  // Permission map (updated for registration features)
   static final Map<String, List<String>> rolePermissions = {
     'student': ['signup', 'login', 'resetPassword', 'upgradeToParticipant', 'getCurrentUserProfile', 'getAllEvents', 'searchEvents', 'getSortedEvents', 'getEventDetails', 'registerForEvent', 'unregisterFromEvent', 'getUserRegisteredEvents'],
-    'organizer': ['signup', 'login', 'resetPassword', 'getCurrentUserProfile', 'addEvent', 'updateEvent', 'deleteEvent', 'getAllEvents', 'searchEvents', 'getSortedEvents', 'getEventDetails'],
-    'admin': ['signup', 'login', 'resetPassword', 'approveStaff', 'getPendingStaffApprovals', 'getCurrentUserProfile', 'addEvent', 'updateEvent', 'deleteEvent', 'getAllEvents', 'searchEvents', 'getSortedEvents', 'getEventDetails'],
+    'organizer': ['signup', 'login', 'resetPassword', 'getCurrentUserProfile', 'addEvent', 'updateEvent', 'deleteEvent', 'getAllEvents', 'searchEvents', 'getSortedEvents', 'getEventDetails', 'getEventRegistrations', 'approveRegistration', 'rejectRegistration', 'sendMessage'],
+    'admin': ['signup', 'login', 'resetPassword', 'approveStaff', 'getPendingStaffApprovals', 'getCurrentUserProfile', 'addEvent', 'updateEvent', 'deleteEvent', 'getAllEvents', 'searchEvents', 'getSortedEvents', 'getEventDetails', 'getEventRegistrations', 'approveRegistration', 'rejectRegistration', 'sendMessage'],
   };
 
   static bool hasPermission(String role, String feature) {
@@ -258,6 +259,7 @@ class Permissions {
     await GoogleSignIn().signOut();
     await clearUserData();
   }
+
 
   // Event Browsing and Filtering (merged from event_service.dart)
   static Future<List<Map<String, dynamic>>> getAllEvents({
@@ -581,5 +583,7 @@ class Permissions {
     return doc.data()!;
   }
 
+
+  /
 // More features (events, etc.) added later as per SRS
 }
