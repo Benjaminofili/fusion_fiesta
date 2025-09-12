@@ -184,47 +184,26 @@ class Permissions {
     return user;
   }
 
-  // Test account creation (temporary; remove after use)
-  static Future<void> createTestAccount(String email, String password, String role) async {
-    try {
-      UserCredential userCredential = await _auth.createUserWithEmailAndPassword(email: email, password: password);
-      await _db.collection('users').doc(userCredential.user!.uid).set({
-        'email': email,
-        'role': role,
-        'userType': role == 'admin' ? 'admin' : 'organizer',
-        'approved': role == 'admin',
-        'name': 'Test $role',
-        'phone': '1234567890',
-      });
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('uid', userCredential.user!.uid);
-      await prefs.setString('role', role);
-      debugPrint('Test $role account created: $email');
-    } catch (e) {
-      debugPrint('Error creating test account: $e');
-    }
-  }
-
   // Upgrade to participant (SRS: add details for event registration)
   static Future<void> upgradeToParticipant({
-    required String uid,
     required String department,
     required String enrollmentNumber,
     required String collegeIdProofUrl,
   }) async {
-    final userDoc = await _db.collection('users').doc(uid).get();
-    if (!userDoc.exists) throw Exception('User not found');
-    final data = userDoc.data()!;
-    if (data['role'] != 'student' || data['userType'] == 'participant') throw Exception('Invalid upgrade');
-
-    await _db.collection('users').doc(uid).update({
-      'userType': 'participant',
+    if (department.isEmpty || enrollmentNumber.isEmpty || collegeIdProofUrl.isEmpty) {
+      throw Exception('Invalid upgrade: All fields are required');
+    }
+    final userId = FirebaseAuth.instance.currentUser!.uid;
+    if (userId.isEmpty) throw Exception('User not authenticated');
+    final db = FirebaseFirestore.instance;
+    await db.collection('users').doc(userId).update({
       'department': department,
       'enrollmentNumber': enrollmentNumber,
       'collegeIdProofUrl': collegeIdProofUrl,
-      'upgradedAt': FieldValue.serverTimestamp(),
+      'userType': 'participant',
+      'approved': false, // Pending approval
     });
-    await saveUserData({...data, 'userType': 'participant', 'department': department, 'enrollmentNumber': enrollmentNumber, 'collegeIdProofUrl': collegeIdProofUrl});
+    debugPrint('Upgrade successful for $userId');
   }
 
   // Forgot password (SRS: reset via secure token/email)
@@ -241,8 +220,21 @@ class Permissions {
   }
 
   static Future<List<Map<String, dynamic>>> getPendingStaffApprovals() async {
-    final snapshot = await _db.collection('users').where('approved', isEqualTo: false).where('role', whereIn: ['organizer', 'admin']).get();
-    return snapshot.docs.map((doc) => {'uid': doc.id, ...doc.data()}).toList();
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) {
+      throw Exception('Authentication required');
+    }
+    try {
+      final snapshot = await _db.collection('users')
+          .where('approved', isEqualTo: false)
+          .get();
+      return snapshot.docs.map((doc) => {
+        ...doc.data(),
+        'userId': doc.id,
+      }).toList();
+    } catch (e) {
+      debugPrint('Error in getPendingStaffApprovals: $e');
+      rethrow;
+    }
   }
 
   // Profile fetch
@@ -260,7 +252,9 @@ class Permissions {
     await clearUserData();
   }
 
-
+  // **************** //
+  // **** EVENTS *****//
+  // **************** //
   // Event Browsing and Filtering (merged from event_service.dart)
   static Future<List<Map<String, dynamic>>> getAllEvents({
     String? category, // technical, cultural, sports
@@ -329,42 +323,40 @@ class Permissions {
 
   // Sort events (newest, popular, eligible)
   static Future<List<Map<String, dynamic>>> getSortedEvents({
+    required List<Map<String, dynamic>> events,
     String sortBy = 'newest',
-    String? userDepartment, // For eligibility filter
+    String? userDepartment,
   }) async {
-    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
-
-    try {
-      final events = await getAllEvents();
-      final userData = await _getUserData();
-      final isStudent = userData['role'] == 'student';
-      final isParticipant = isStudent && userData['userType'] == 'participant';
-
-      return events.map((event) {
-        bool isEligible = true;
-        if (isParticipant && event['department'] != null && event['department'] != userDepartment) {
-          isEligible = false;
-        }
-        return {...event, '_isEligible': isEligible};
-      }).toList()
-        ..sort((a, b) {
-          switch (sortBy) {
-            case 'newest':
-              final aDate = (a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(1900);
-              final bDate = (b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(1900);
-              return bDate.compareTo(aDate);
-            case 'popularity':
-              return (b['popularity'] as int?)?.compareTo(a['popularity'] as int? ?? 0) ?? 0;
-            case 'eligible':
-              return (b['_isEligible'] ? 1 : 0).compareTo(a['_isEligible'] ? 1 : 0);
-            default:
-              return 0;
-          }
+    List<Map<String, dynamic>> sortedEvents = List.from(events); // Create a copy to avoid mutating input
+    switch (sortBy) {
+      case 'newest':
+        sortedEvents.sort((a, b) {
+          final aTime = (a['dateTime'] as Timestamp?)?.toDate() ?? DateTime.now();
+          final bTime = (b['dateTime'] as Timestamp?)?.toDate() ?? DateTime.now();
+          return bTime.compareTo(aTime); // Newest first
         });
-    } catch (e) {
-      debugPrint('Error in getSortedEvents: $e');
-      rethrow;
+        break;
+      case 'popularity':
+        sortedEvents.sort((a, b) {
+          final aPop = (a['popularity'] as int?) ?? 0;
+          final bPop = (b['popularity'] as int?) ?? 0;
+          return bPop.compareTo(aPop); // Most popular first
+        });
+        break;
+      case 'eligible':
+        if (userDepartment != null && userDepartment.isNotEmpty) {
+          sortedEvents.sort((a, b) {
+            final aEligible = (a['department'] == userDepartment || a['department'] == null || a['department'].isEmpty);
+            final bEligible = (b['department'] == userDepartment || b['department'] == null || b['department'].isEmpty);
+            if (aEligible == bEligible) return 0;
+            return aEligible ? -1 : 1; // Eligible first
+          });
+        }
+        break;
+      default:
+        debugPrint('Unknown sortBy: $sortBy');
     }
+    return sortedEvents;
   }
 
   // Event details for detail page (desc, organizer contact, rules, registration if slots > 0)
@@ -388,106 +380,174 @@ class Permissions {
     }
   }
 
-  // Register (only if eligible/slots available; transactional)
+// Fixed registerForEvent method for permissions.dart
   static Future<void> registerForEvent(String eventId) async {
-    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) {
+      throw Exception('Authentication required');
+    }
 
     try {
-      final eventRef = _db.collection('events').doc(eventId);
-      final userRef = _db.collection('users').doc(_auth.currentUser!.uid);
+      final userData = await getUserData();
+      if (userData['role'] != 'student' || userData['userType'] != 'participant') {
+        throw Exception('Only verified participants can register');
+      }
+      if (userData['department'].isEmpty ||
+          userData['enrollmentNumber'].isEmpty ||
+          userData['collegeIdProofUrl'].isEmpty) {
+        throw Exception('Complete your profile (department, enrollment, ID proof) to register');
+      }
 
+      final userId = _auth.currentUser!.uid;
+
+      // Check if already registered BEFORE starting transaction
+      final existingRegistration = await _db
+          .collection('events')
+          .doc(eventId)
+          .collection('registrations')
+          .doc(userId)
+          .get();
+
+      if (existingRegistration.exists) {
+        throw Exception('Already registered for this event');
+      }
+
+      // Use a transaction to ensure atomicity
       await _db.runTransaction((transaction) async {
+        final eventRef = _db.collection('events').doc(eventId);
+        final registrationRef = eventRef.collection('registrations').doc(userId);
+
+        // Double-check within transaction (in case of concurrent registrations)
+        final existingReg = await transaction.get(registrationRef);
+        if (existingReg.exists) {
+          throw Exception('Already registered for this event');
+        }
+
+        // Get event data
         final eventDoc = await transaction.get(eventRef);
-        if (!eventDoc.exists) throw Exception('Event not found');
+        if (!eventDoc.exists) {
+          throw Exception('Event not found');
+        }
 
         final eventData = eventDoc.data()!;
-        final slotsAvailable = eventData['slotsAvailable'] ?? 0;
-        final currentParticipants = eventData['currentParticipants'] ?? 0;
 
-        if (slotsAvailable <= 0) throw Exception('No slots available');
+        // Check registration eligibility
+        if (eventData['status'] != 'approved' && eventData['status'] != 'live') {
+          throw Exception('Registration is not open for this event');
+        }
 
-        transaction.update(eventRef, {
-          'slotsAvailable': slotsAvailable - 1,
-          'currentParticipants': currentParticipants + 1,
-          'popularity': (eventData['popularity'] ?? 0) + 1,
-        });
+        final slotsAvailable = (eventData['slotsAvailable'] as int?) ?? 0;
+        if (slotsAvailable <= 0) {
+          throw Exception('No slots available');
+        }
 
-        transaction.set(userRef.collection('registrations').doc(eventId), {
+        // Check if registration deadline has passed
+        final deadline = eventData['deadline'] as Timestamp?;
+        if (deadline != null && DateTime.now().isAfter(deadline.toDate())) {
+          throw Exception('Registration deadline has passed');
+        }
+
+        // Create the registration document
+        transaction.set(registrationRef, {
+          'userId': userId,
           'eventId': eventId,
           'registeredAt': FieldValue.serverTimestamp(),
+          'status': 'approved', // Auto-approve for now, or set to 'pending' if manual approval needed
+          'userEmail': userData['email'],
+          'userName': userData['name'],
+          'userDepartment': userData['department'],
+          'userEnrollmentNumber': userData['enrollmentNumber'],
+        });
+
+        // Update event counters
+        transaction.update(eventRef, {
+          'slotsAvailable': slotsAvailable - 1,
+          'currentParticipants': (eventData['currentParticipants'] as int? ?? 0) + 1,
+          'popularity': (eventData['popularity'] as int? ?? 0) + 1,
         });
       });
+
+      debugPrint('Registration successful for ${userData['email']}');
+
     } catch (e) {
       debugPrint('Error in registerForEvent: $e');
       rethrow;
     }
   }
 
-  // Unregister from event
   static Future<void> unregisterFromEvent(String eventId, String userId) async {
-    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
-    if (_auth.currentUser!.uid != userId) throw Exception('Can only unregister own account');
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) {
+      throw Exception('Authentication required');
+    }
 
     try {
-      final eventRef = _db.collection('events').doc(eventId);
-      final userRef = _db.collection('users').doc(userId);
+      final userData = await getUserData();
+      if (userData['role'] != 'student' || userData['userType'] != 'participant') {
+        throw Exception('Only verified participants can unregister');
+      }
 
+      // Check if registered BEFORE starting transaction
+      final existingRegistration = await _db
+          .collection('events')
+          .doc(eventId)
+          .collection('registrations')
+          .doc(userId)
+          .get();
+
+      if (!existingRegistration.exists) {
+        throw Exception('Not registered for this event');
+      }
+
+      // Use a transaction to ensure atomicity
       await _db.runTransaction((transaction) async {
+        final eventRef = _db.collection('events').doc(eventId);
+        final registrationRef = eventRef.collection('registrations').doc(userId);
+
+        // Double-check within transaction
+        final existingReg = await transaction.get(registrationRef);
+        if (!existingReg.exists) {
+          throw Exception('Not registered for this event');
+        }
+
+        // Get event data
         final eventDoc = await transaction.get(eventRef);
-        if (!eventDoc.exists) throw Exception('Event not found');
+        if (!eventDoc.exists) {
+          throw Exception('Event not found');
+        }
 
         final eventData = eventDoc.data()!;
-        int currentParticipants = eventData['currentParticipants'] ?? 0;
-        int slotsAvailable = eventData['slotsAvailable'] ?? 0;
 
-        if (currentParticipants <= 0) throw Exception('No participants to remove');
+        // Check unregistration eligibility (mirror registration checks)
+        if (eventData['status'] != 'approved' && eventData['status'] != 'live') {
+          throw Exception('Event is not in a valid state for unregistration');
+        }
 
-        final registration = await userRef.collection('registrations').doc(eventId).get();
-        if (!registration.exists) throw Exception('Not registered for this event');
+        final slotsAvailable = (eventData['slotsAvailable'] as int?) ?? 0;
+        final currentParticipants = (eventData['currentParticipants'] as int?) ?? 0;
 
+        // Check if unregistration deadline has passed (opposite of registration deadline)
+        final deadline = eventData['deadline'] as Timestamp?;
+        if (deadline != null && DateTime.now().isAfter(deadline.toDate())) {
+          throw Exception('Unregistration deadline has passed');
+        }
+
+        // Delete the registration document
+        transaction.delete(registrationRef);
+
+        // Update event counters (opposite of registration)
         transaction.update(eventRef, {
           'slotsAvailable': slotsAvailable + 1,
           'currentParticipants': currentParticipants - 1,
-          'popularity': math.max(0, (eventData['popularity'] ?? 0) - 1),
+          'popularity': (eventData['popularity'] as int? ?? 0) - 1,
         });
-
-        transaction.delete(userRef.collection('registrations').doc(eventId));
       });
+
+      debugPrint('Unregistration successful for ${userData['email']}');
+
     } catch (e) {
       debugPrint('Error in unregisterFromEvent: $e');
       rethrow;
     }
   }
-
-  // Get user's registered events
-  static Future<List<Map<String, dynamic>>> getUserRegisteredEvents(String userId) async {
-    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
-    if (_auth.currentUser!.uid != userId) throw Exception('Can only view own registrations');
-
-    try {
-      final registrations = await _db
-          .collection('users')
-          .doc(userId)
-          .collection('registrations')
-          .get();
-
-      List<Map<String, dynamic>> events = [];
-
-      for (var registration in registrations.docs) {
-        final eventId = registration.data()['eventId'] as String;
-        final eventData = await getEventDetails(eventId);
-        if (eventData != null) {
-          events.add(eventData);
-        }
-      }
-
-      return events;
-    } catch (e) {
-      debugPrint('Error in getUserRegisteredEvents: $e');
-      rethrow;
-    }
-  }
-
   // Add new event with role validation
   static Future<void> addEvent(Map<String, dynamic> eventData) async {
     if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
@@ -583,7 +643,175 @@ class Permissions {
     return doc.data()!;
   }
 
+  // *********************** //
+  // ***** REGISTRATIONS ****//
+  // *********************** //
+  // New: Get registrations for an event (for organizers)
+  static Future<List<Map<String, dynamic>>> getEventRegistrations(String eventId) async {
+    try {
+      final registrations = await _db.collection('events').doc(eventId).collection('registrations').get();
+      return registrations.docs.map((doc) => {
+        'userId': doc.id,
+        ...doc.data(),
+      }).toList();
+    } catch (e) {
+      debugPrint('Error in getEventRegistrations: $e');
+      rethrow;
+    }
+  }
 
-  /
+  // New: Approve a registration
+  static Future<void> approveRegistration(String eventId, String userId) async {
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
+    try {
+      await _db.collection('events').doc(eventId).collection('registrations').doc(userId).update({
+        'status': 'approved',
+        'approvedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Error in approveRegistration: $e');
+      rethrow;
+    }
+  }
+
+  // New: Reject a registration
+  static Future<void> rejectRegistration(String eventId, String userId) async {
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
+    try {
+      await _db.collection('events').doc(eventId).collection('registrations').doc(userId).update({
+        'status': 'rejected',
+        'rejectedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Error in rejectRegistration: $e');
+      rethrow;
+    }
+  }
+
+  // New: Send internal message to participant
+  static Future<void> sendMessage(String eventId, String userId, String message) async {
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) throw Exception('Authentication required');
+    try {
+      await _db.collection('events').doc(eventId).collection('messages').add({
+        'to': userId,
+        'from': _auth.currentUser!.uid,
+        'message': message,
+        'sentAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Error in sendMessage: $e');
+      rethrow;
+    }
+  }
+
+
+  // Enhanced getUserRegisteredEvents (include QR code data)
+  static Future<List<Map<String, dynamic>>> getUserRegisteredEvents(String userId) async {
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) {
+      throw Exception('Authentication required');
+    }
+    if (_auth.currentUser!.uid != userId) {
+      throw Exception('Can only view own registrations');
+    }
+
+    try {
+      // Use the collection group query
+      final registrations = await _db
+          .collectionGroup('registrations')
+          .where('userId', isEqualTo: userId)
+          .get();
+
+      if (registrations.docs.isEmpty) {
+        return [];
+      }
+
+      // Get unique event IDs
+      final eventIds = registrations.docs
+          .map((doc) => doc.reference.parent.parent!.id)
+          .toSet()
+          .toList();
+
+      // Fetch event details
+      final List<Map<String, dynamic>> results = [];
+
+      for (String eventId in eventIds) {
+        try {
+          final eventDoc = await _db.collection('events').doc(eventId).get();
+          if (eventDoc.exists) {
+            final eventData = eventDoc.data()!;
+            final registration = registrations.docs
+                .firstWhere((doc) => doc.reference.parent.parent!.id == eventId);
+
+            final qrData = 'Event:$eventId|User:$userId|Time:${DateTime.now().toIso8601String()}';
+
+            results.add({
+              ...eventData,
+              'id': eventId,
+              'qrData': qrData,
+              'registrationStatus': registration.data()['status'] ?? 'pending',
+              'registeredAt': registration.data()['registeredAt'],
+            });
+          }
+        } catch (e) {
+          debugPrint('Error fetching event $eventId: $e');
+        }
+      }
+
+      return results;
+    } catch (e) {
+      debugPrint('Error in getUserRegisteredEvents: $e');
+      rethrow;
+    }
+  }
+
+  static Future<bool> isUserRegisteredForEvent(String eventId, String userId) async {
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) {
+      throw Exception('Authentication required');
+    }
+
+    try {
+      final registrationDoc = await _db
+          .collection('events')
+          .doc(eventId)
+          .collection('registrations')
+          .doc(userId)
+          .get();
+
+      return registrationDoc.exists;
+    } catch (e) {
+      debugPrint('Error checking registration status: $e');
+      return false;
+    }
+  }
+
+// Also add this method to get detailed registration info
+  static Future<Map<String, dynamic>?> getUserRegistrationForEvent(String eventId, String userId) async {
+    if (_auth.currentUser == null || _auth.currentUser!.uid.isEmpty) {
+      throw Exception('Authentication required');
+    }
+
+    try {
+      final registrationDoc = await _db
+          .collection('events')
+          .doc(eventId)
+          .collection('registrations')
+          .doc(userId)
+          .get();
+
+      if (registrationDoc.exists) {
+        return {
+          'id': registrationDoc.id,
+          ...registrationDoc.data()!,
+          'qrData': 'Event:$eventId|User:$userId|Time:${DateTime.now().toIso8601String()}',
+        };
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error getting registration info: $e');
+      return null;
+    }
+  }
+
+
 // More features (events, etc.) added later as per SRS
 }

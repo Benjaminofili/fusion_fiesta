@@ -1,6 +1,4 @@
 import 'permissions.dart';
-// import '../screens/admins/dashboard.dart';
-// import '../components/admins/approval_list.dart';
 
 class AdminLogic {
   static Future<void> init() async {
@@ -32,5 +30,11 @@ class AdminLogic {
     }
   }
 
-// Call in UI: AdminLogic.init() → dashboard.dart with approval_list.dart
+  // New method to get pending approvals
+  static Future<List<Map<String, dynamic>>> getPendingApprovals() async {
+    if (Permissions.hasPermission('admin', 'getPendingStaffApprovals')) {
+      return await Permissions.getPendingStaffApprovals();
+    }
+    return [];
+  }
 }

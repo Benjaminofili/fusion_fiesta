@@ -6,6 +6,7 @@ class EventCard extends StatelessWidget {
   final DateTime? dateTime;
   final String? location;
   final int slotsAvailable;
+  final bool isRegistered; // Added parameter
   final VoidCallback onTap;
 
   const EventCard({
@@ -15,6 +16,7 @@ class EventCard extends StatelessWidget {
     this.dateTime,
     this.location,
     required this.slotsAvailable,
+    required this.isRegistered, // Required parameter
     required this.onTap,
   });
 
@@ -31,6 +33,7 @@ class EventCard extends StatelessWidget {
             if (dateTime != null) Text('Date: ${dateTime!.toString().split(' ')[0]}'),
             if (location != null) Text('Location: $location'),
             Text('Slots: $slotsAvailable'),
+            if (isRegistered) Text('Registered', style: TextStyle(color: Colors.green)),
           ],
         ),
         trailing: const Icon(Icons.arrow_forward),

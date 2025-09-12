@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart'; // Fix: For Timestamp type
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../logic/permissions.dart';
 import '../../logic/user.dart';
 import '../auth_screen.dart';
-import 'event_detail_screen.dart'; // New detail screen (same folder/package)
-import '../../components/users/event_card.dart'; // Summary card component
+import 'event_detail_screen.dart';
+import 'upgrade_screen.dart';
+import '../../components/users/event_card.dart';
 
 class UsersHomeScreen extends StatefulWidget {
   final String userType;
-  const UsersHomeScreen({super.key, required this.userType});
+  final String uid;
+  const UsersHomeScreen({super.key, required this.userType, required this.uid});
 
   @override
   State<UsersHomeScreen> createState() => _UsersHomeScreenState();
@@ -19,32 +21,28 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
   String _sortBy = 'newest';
   String? _category, _department;
   List<Map<String, dynamic>> _events = [];
+  List<Map<String, dynamic>> _registeredEvents = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    UserLogic.init('uid'); // From auth
+    UserLogic.init(widget.uid);
     _loadEvents();
+    _loadRegisteredEvents();
   }
 
   Future<void> _loadEvents() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
     List<Map<String, dynamic>> events;
     if (_searchQuery.isNotEmpty) {
-      // Use search if query active (Fix: Integrate _searchQuery)
       final results = await UserLogic.searchEvents(_searchQuery);
       events = results['matches'] ?? [];
     } else {
-      // Use browse with filters
       events = await UserLogic.browseEvents(category: _category, department: _department);
     }
-    // Apply sort to filtered/search results (Fix: Pass events to getSortedEvents to avoid overriding)
-    final sortedEvents = await UserLogic.getSortedEvents(
-      events: events, // Pass filtered events
-      sortBy: _sortBy,
-      userDepartment: _department,
-    );
+    final sortedEvents = await UserLogic.getSortedEvents(events: events, sortBy: _sortBy, userDepartment: _department);
     if (mounted) {
       setState(() {
         _events = sortedEvents;
@@ -53,79 +51,95 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
     }
   }
 
-  // Fix: Separate async method for onChanged (debounced for performance)
+  Future<void> _loadRegisteredEvents() async {
+    if (!mounted) return;
+    final events = await UserLogic.getUserRegisteredEvents();
+    if (mounted) setState(() => _registeredEvents = events);
+  }
+
   Future<void> _handleSearch(String value) async {
-    if (value != _searchQuery) {
-      setState(() => _searchQuery = value);
-      await _loadEvents(); // Reload with search/filters
-      if (value.isNotEmpty) {
-        final results = await UserLogic.searchEvents(value);
-        _showSuggestions(results['suggestions'] ?? []); // Fix: Reference _showSuggestions
+    if (!mounted || value == _searchQuery) return;
+    setState(() => _searchQuery = value);
+    await _loadEvents();
+    if (value.isNotEmpty && mounted) {
+      final results = await UserLogic.searchEvents(value);
+      _showSuggestions(results['suggestions'] ?? []);
+    }
+  }
+
+  Future<void> _handleFilterChange() async {
+    if (!mounted) return;
+    await _loadEvents();
+  }
+
+  Future<void> _registerForEvent(String eventId) async {
+    if (!mounted) return;
+    try {
+      await UserLogic.registerForEvent(eventId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registered successfully!')));
+        await _loadRegisteredEvents();
+        await _updateEventList(eventId); // Refresh event list after registration
+      }
+    } catch (e) {
+      if (!mounted) return;
+      if (e.toString().contains('Complete your project')) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => UpgradeScreen()));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }
 
-  // Fix: Separate async method for filter/sort changes
-  Future<void> _handleFilterChange() async {
-    await _loadEvents(); // Reload with current filters/sort
+  Future<void> _unregisterFromEvent(String eventId) async {
+    if (!mounted) return;
+    try {
+      await UserLogic.unregisterFromEvent(eventId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unregistered successfully!')));
+        await _loadRegisteredEvents();
+        await _updateEventList(eventId); // Refresh event list after unregistration
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  Future<void> _updateEventList(String eventId) async {
+    final index = _events.indexWhere((e) => e['id'] == eventId);
+    if (index != -1) {
+      final isRegistered = await UserLogic.isUserRegisteredForEvent(eventId);
+      setState(() {
+        _events[index]['isRegistered'] = isRegistered;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Events - ${widget.userType}'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red),
-            onPressed: () async {
-              await Permissions.signOut();
-              if (context.mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AuthScreen()));
-            },
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Home')),
       body: Column(
         children: [
-          // Search Bar with Autosuggestions
-          TextField(
-            onChanged: (value) {
-              // Fix: Call async method (debounce via _handleSearch)
-              _handleSearch(value);
-            },
-            decoration: const InputDecoration(
-              labelText: 'Search Events (keywords/tags)',
-              prefixIcon: Icon(Icons.search),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: TextField(
+              onChanged: _handleSearch,
+              decoration: const InputDecoration(labelText: 'Search Events'),
             ),
           ),
-          // Filters/Sort
           Row(
             children: [
-              DropdownButton<String>(
-                value: _category,
-                hint: const Text('Category'),
-                items: ['technical', 'cultural', 'sports'].map((c) => DropdownMenuItem(value: c, child: Text(c.capitalize))).toList(),
-                onChanged: (v) {
-                  setState(() => _category = v);
-                  _handleFilterChange(); // Fix: Async call for UI update
-                },
-              ),
-              if (widget.userType == 'participant') DropdownButton<String>(
-                value: _department,
-                hint: const Text('Department'),
-                items: ['CS', 'ME', 'EE'].map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(), // From user data
-                onChanged: (v) {
-                  setState(() => _department = v);
-                  _handleFilterChange(); // Fix: Async call for UI update
-                },
-              ),
-              DropdownButton<String>(
-                value: _sortBy,
-                items: ['newest', 'popularity', 'eligible'].map((s) => DropdownMenuItem(value: s, child: Text(s.capitalize))).toList(),
-                onChanged: (v) {
-                  setState(() => _sortBy = v!);
-                  _handleFilterChange(); // Fix: Async call for UI update
-                },
+              Expanded(
+                child: DropdownButton<String>(
+                  value: _sortBy,
+                  items: ['newest', 'popularity', 'eligible'].map((s) => DropdownMenuItem(value: s, child: Text(s.capitalize))).toList(),
+                  onChanged: (v) {
+                    if (mounted) setState(() => _sortBy = v!);
+                    _handleFilterChange();
+                  },
+                ),
               ),
             ],
           ),
@@ -136,13 +150,30 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
               itemCount: _events.length,
               itemBuilder: (context, index) {
                 final event = _events[index];
-                return EventCard(
-                  title: event['title'] ?? 'Untitled',
-                  imageUrl: event['imageUrl'], // Assume field
-                  dateTime: (event['dateTime'] as Timestamp?)?.toDate(), // Fix: Timestamp imported
-                  location: event['location'],
-                  slotsAvailable: event['slotsAvailable'] ?? 0,
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => EventDetailScreen(eventId: event['id']))),
+                return FutureBuilder<bool>(
+                  future: UserLogic.isUserRegisteredForEvent(event['id']),
+                  builder: (context, snapshot) {
+                    final isRegistered = snapshot.data ?? false;
+                    return EventCard(
+                      title: event['title'] ?? 'Untitled',
+                      imageUrl: event['imageUrl'],
+                      dateTime: (event['dateTime'] as Timestamp?)?.toDate(),
+                      location: event['location'],
+                      slotsAvailable: event['slotsAvailable'] ?? 0,
+                      onTap: () async {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => EventDetailScreen(
+                              eventId: event['id'],
+                              onRegister: () => _registerForEvent(event['id']),
+                              onUnregister: () => _unregisterFromEvent(event['id']),
+                            ),
+                          ),
+                        );
+                      }, isRegistered: isRegistered,
+                    );
+                  },
                 );
               },
             ),
@@ -153,7 +184,7 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
   }
 
   void _showSuggestions(List<Map<String, dynamic>> suggestions) {
-    // Implement overlay or dialog with suggestion cards
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -176,12 +207,21 @@ class _UsersHomeScreenState extends State<UsersHomeScreen> {
 
   void _selectSuggestion(Map<String, dynamic> event) {
     Navigator.pop(context);
-    // Navigate to detail
-    Navigator.push(context, MaterialPageRoute(builder: (_) => EventDetailScreen(eventId: event['id'])));
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => EventDetailScreen(
+            eventId: event['id'],
+            onRegister: () => _registerForEvent(event['id']),
+            onUnregister: () => _unregisterFromEvent(event['id']),
+          ),
+        ),
+      );
+    }
   }
 }
 
-// Extension for capitalize
 extension StringExtension on String {
-  String get capitalize => this[0].toUpperCase() + substring(1);
+  String get capitalize => isEmpty ? '' : this[0].toUpperCase() + substring(1);
 }

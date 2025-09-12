@@ -161,29 +161,31 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   void _navigateByRole(String role, String userType, bool approved) {
-    if ((role == 'organizer' || role == 'admin') && !approved) {
-      _showError('Account pending admin approval');
-      return;
-    }
     switch (role) {
       case 'student':
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => UsersHomeScreen(userType: userType)),
+          MaterialPageRoute(
+            builder: (_) => UsersHomeScreen(userType: userType, uid: FirebaseAuth.instance.currentUser!.uid),
+          ),
         );
         break;
       case 'admin':
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => AdminDashboard()),
-        );
+        if (!approved) {
+          _showError("Admin account awaiting approval");
+          return;
+        }
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => AdminDashboard()));
         break;
       case 'organizer':
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => OrganizerDashboard()),
-        );
+        if (!approved) {
+          _showError("Organizer account awaiting approval");
+          return;
+        }
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => OrganizerDashboard(eventId: 'eventId')));
         break;
+      default:
+        _showError("Invalid role");
     }
   }
 
@@ -393,7 +395,8 @@ class _AuthScreenState extends State<AuthScreen> {
                         onPressed: _isLoading ? null : _handleGoogleSignIn,
                         style: OutlinedButton.styleFrom(
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          side: BorderSide(color: Colors.grey[300]!),                        ),
+                          side: BorderSide(color: Colors.grey[300]!),
+                        ),
                         icon: const Icon(Icons.login, color: Colors.red),
                         label: Text(
                           "Continue with Google",

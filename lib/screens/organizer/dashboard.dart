@@ -1,55 +1,59 @@
 import 'package:flutter/material.dart';
+import '../../logic/organizer.dart';
+import '../../components/organizers/registration_list.dart';
 import '../../logic/permissions.dart';
-import '../../logic/organizer.dart'; // Role selector
 import '../auth_screen.dart';
-// import '../../components/organizers/event_form.dart'; // Placeholder component
 
-class OrganizerDashboard extends StatelessWidget {
-  const OrganizerDashboard({super.key});
+class OrganizerDashboard extends StatefulWidget {
+  final String eventId;
+  const OrganizerDashboard({super.key, required this.eventId});
+
+  @override
+  State<OrganizerDashboard> createState() => _OrganizerDashboardState();
+}
+
+class _OrganizerDashboardState extends State<OrganizerDashboard> {
+  List<Map<String, dynamic>> _registrations = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    OrganizerLogic.init();
+    _loadRegistrations();
+  }
+
+  Future<void> _loadRegistrations() async {
+    setState(() => _isLoading = true);
+    final regs = await OrganizerLogic.getEventRegistrations(widget.eventId);
+    if (mounted) setState(() { _registrations = regs; _isLoading = false; });
+    debugPrint('Loaded ${regs.length} registrations for ${widget.eventId}'); // Changed to debugPrint
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Call role logic init (e.g., load events)
-    OrganizerLogic.init();
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Organizer Dashboard'),
-        backgroundColor: Colors.green[50],
-        actions: [
-          // Temp logout button
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red),
-            onPressed: () async {
-              await Permissions.signOut();
-              if (context.mounted) {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (_) => const AuthScreen()),
-                );
-              }
-            },
-          ),
-        ],
-      ),
-      body: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text('Organizer Panel', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            SizedBox(height: 20),
-            Text('Create and manage events.'),
-            // Later: Form for events via components/organizers/event_form.dart
-          ],
+      appBar: AppBar(title: const Text('Organizer Dashboard'),actions: [
+        IconButton(
+          icon: const Icon(Icons.logout, color: Colors.red),
+          onPressed: () async {
+            await Permissions.signOut();
+            if (mounted) {
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) =>  AuthScreen()));
+            }
+          },
         ),
+      ], ) ,
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _registrations.isEmpty
+          ? const Center(child: Text('No registrations yet'))
+          : RegistrationList(
+        registrations: _registrations,
+        onApprove: (userId) => OrganizerLogic.approveRegistration(widget.eventId, userId),
+        onReject: (userId) => OrganizerLogic.rejectRegistration(widget.eventId, userId),
+        onMessage: (userId, msg) => OrganizerLogic.sendMessage(widget.eventId, userId, msg),
       ),
-      // floatingActionButton: FloatingActionButton(
-      //   onPressed: () {
-      //     // Temp: Call organizer-specific logic
-      //     OrganizerLogic.addEvent(); // Define in organizer.dart
-      //   },
-      //   child: const Icon(Icons.add_event),
-      // ),
     );
   }
 }
